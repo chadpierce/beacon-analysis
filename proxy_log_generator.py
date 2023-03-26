@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 def generate_dummy_log_data(num_sources=200):
     start_time = datetime(2023, 3, 2, 20, 58, 27)
-    end_time = start_time + timedelta(hours=8)
+    end_time = start_time + timedelta(hours=24)
     current_time = start_time
     time_increment = timedelta(seconds=1)
     beacon_time = start_time

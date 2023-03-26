@@ -22,6 +22,23 @@ package main
  *	Source code from RITA_pcap was fed to the AI, and then it was instructed to re-write
  *	the same logic in go using only native libraries (some tweaking was required).
  *
+ *
+ * 	This is documentation also written by Bing Chat:
+ *
+ * 	The calculation of each individual score can be tuned to account for variances in real-world traffic by adjusting the
+ *		parameters used in their respective calculations.
+ *
+ * 	For example:
+ *
+ * 	- The skew score is calculated based on the skewness of the time deltas between consecutive records in a grouped record.
+ *		You could adjust the percentiles used to calculate the skewness if desired.
+ * 	- The MADM score is calculated based on the median absolute deviation from the median (MADM) of the time deltas between
+ * 		consecutive records in a grouped record. You could adjust the scaling factor used to normalize the MADM value if desired.
+ * 	- The connection count score is calculated based on the number of records in a grouped record divided by the time duration
+ *		between the first and last record. You could adjust the scaling factor used to normalize this value if desired.
+ * 	- The size score is calculated based on the median absolute deviation from the median (MADM) of the sent and received
+ * 		sizes in a grouped record. You could adjust the scaling factor used to normalize these values if desired.
+ *
  */
 
 import (
@@ -58,14 +75,17 @@ type GroupedRecord struct {
 
 // ScoredRecord represents a grouped record with calculated scores
 type ScoredRecord struct {
-	Src       string
-	Dst       string
-	Score     float64
-	SizeScore float64
+	Src            string
+	Dst            string
+	Score          float64
+	SizeScore      float64
+	SkewScore      float64
+	MadmScore      float64
+	ConnCountScore float64
 }
 
 func main() {
-	file, err := os.Open("proxy1.csv")
+	file, err := os.Open("dummy1.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,7 +113,6 @@ func main() {
 		if row[srcCol] == "-" || row[dstCol] == "-" {
 			continue
 		}
-
 		// Parse timestamp from first column
 		timestamp, err := time.Parse("2006-01-02-15:04:05", row[timeCol])
 		if err != nil {
@@ -162,7 +181,6 @@ func main() {
 			if bowleyNumVal == 0 || midVal == lowVal || midVal == highVal {
 				skewVal = 0
 			}
-
 			madmVal := madm(deltas)
 
 			skewScoreVal := 1 - math.Abs(skewVal)
@@ -179,8 +197,6 @@ func main() {
 				connCountScoreVal = 1
 			}
 
-			scoreVal := (skewScoreVal + madmScoreVal + connCountScoreVal) / 3
-
 			sentMadm := madmInt(groupedRecord.SentSizes)
 			receivedMadm := madmInt(groupedRecord.ReceivedSizes)
 
@@ -189,11 +205,23 @@ func main() {
 				sizeScore = 0
 			}
 
+			// weights for each score can be modified here
+			skewWeight := 1.0
+			madmWeight := 1.0
+			connCountWeight := 1.0
+			sizeWeight := 1.0
+
+			scoreVal := (skewWeight*skewScoreVal + madmWeight*madmScoreVal + connCountWeight*connCountScoreVal + sizeWeight*sizeScore) / (skewWeight + madmWeight + connCountWeight + sizeWeight)
+			//scoreVal := (skewScoreVal + madmScoreVal + connCountScoreVal + sizeScore) / 4
+
 			scoredRecord := ScoredRecord{
-				Src:       groupedRecord.Src,
-				Dst:       groupedRecord.Dst,
-				Score:     scoreVal,
-				SizeScore: sizeScore,
+				Src:            groupedRecord.Src,
+				Dst:            groupedRecord.Dst,
+				Score:          scoreVal,
+				SizeScore:      sizeScore,
+				SkewScore:      skewScoreVal,
+				MadmScore:      madmScoreVal,
+				ConnCountScore: connCountScoreVal,
 			}
 
 			scores <- scoredRecord
@@ -214,7 +242,7 @@ func main() {
 
 	// Print scored records
 	for _, scoredRecord := range scoredRecords {
-		fmt.Printf("%s %s %.3f %.3f\n", scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.SizeScore)
+		fmt.Printf("%s -> %s | SCORE: %.3f | (skew: %.3f) (madm: %.3f) (connCount: %.3f) (size: %.3f)\n", scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.SkewScore, scoredRecord.MadmScore, scoredRecord.ConnCountScore, scoredRecord.SizeScore)
 	}
 }
 
