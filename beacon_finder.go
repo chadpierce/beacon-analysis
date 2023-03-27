@@ -43,6 +43,7 @@ package main
 
 import (
 	"encoding/csv"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -53,6 +54,26 @@ import (
 	"sync"
 	"time"
 )
+
+// Defining arguments
+type Options struct {
+	InputFile       string
+	OutputFile      string
+	ColumnTime      int
+	ColumnSource    int
+	ColumnDest      int
+	ColumnByteRecv  int
+	ColumnByteSent  int
+	MinConnCount    int
+	WeightSkew      float64
+	WeightMadm      float64
+	WeightConnCount float64
+	WeightSize      float64
+	InputProxy      bool
+	InputDNS        bool
+	NoBytes         bool
+	Debug           bool
+}
 
 // Record represents a row in the CSV file
 type Record struct {
@@ -85,7 +106,63 @@ type ScoredRecord struct {
 }
 
 func main() {
-	file, err := os.Open("dummy1.csv")
+	var opts Options
+	flag.StringVar(&opts.InputFile, "i", "", "input csv filename")
+	flag.StringVar(&opts.OutputFile, "o", "", "write output to given filename ")
+	flag.IntVar(&opts.MinConnCount, "m", 36, "minimum number of connections threshold")
+	flag.IntVar(&opts.ColumnTime, "ct", 0, "csv column for timestamp (default 0)")
+	flag.IntVar(&opts.ColumnSource, "cs", 2, "csv column for source")
+	flag.IntVar(&opts.ColumnDest, "cd", 7, "csv column for destination")
+	flag.IntVar(&opts.ColumnByteRecv, "cr", 11, "csv column for bytes recevied")
+	flag.IntVar(&opts.ColumnByteSent, "cx", 12, "csv column for bytes sent")
+	flag.Float64Var(&opts.WeightSkew, "ws", 1.0, "Weight value for skew score")
+	flag.Float64Var(&opts.WeightMadm, "wm", 1.0, "Weight value for MADM score")
+	flag.Float64Var(&opts.WeightConnCount, "wc", 1.0, "Weight value connection count score")
+	flag.Float64Var(&opts.WeightSize, "wz", 1.0, "Weight value for data size score")
+	flag.BoolVar(&opts.InputProxy, "P", false, "Use Proxy Log CSV Inputs")
+	flag.BoolVar(&opts.InputDNS, "D", false, "Use DNS Log CSV Inputs (no size analysis)")
+	flag.BoolVar(&opts.InputDNS, "B", false, "Don't use bytes sent/received in analysis")
+	flag.BoolVar(&opts.InputDNS, "X", false, "Enable debug mode for extra output (TODO)")
+	flag.Parse()
+	// Check if -h flag is provided
+	if flag.Lookup("h") != nil {
+		fmt.Println("Usage of program:")
+		flag.PrintDefaults()
+		os.Exit(0)
+	}
+	if opts.InputFile == "" {
+		fmt.Println("Must supply input file (-i filename.csv)")
+		os.Exit(0)
+	}
+
+	if opts.InputProxy && opts.InputDNS {
+		fmt.Println("ERROR: cannot use both -P and -D")
+		os.Exit(0)
+	} else if opts.InputProxy && !opts.InputDNS {
+		fmt.Println("INFO: Proxy mode selected")
+		opts.ColumnTime = 0
+		opts.ColumnSource = 2
+		opts.ColumnDest = 7
+		opts.ColumnByteSent = 11
+		opts.ColumnByteRecv = 12
+	} else if !opts.InputProxy && opts.InputDNS {
+		fmt.Println("INFO: DNS mode selected")
+		opts.ColumnTime = 0
+		opts.ColumnSource = 1
+		opts.ColumnDest = 2
+		opts.ColumnByteSent = -1
+		opts.ColumnByteRecv = -1
+		opts.WeightSize = 0
+		opts.NoBytes = true
+	}
+
+	timeCol := opts.ColumnTime
+	srcCol := opts.ColumnSource
+	dstCol := opts.ColumnDest
+	bytesSentCol := opts.ColumnByteSent
+	bytesReceivedCol := opts.ColumnByteRecv
+
+	file, err := os.Open(opts.InputFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,12 +170,6 @@ func main() {
 
 	reader := csv.NewReader(file)
 	var records []Record
-
-	timeCol := 0           // column index for timestamp
-	srcCol := 2            // column index for source
-	dstCol := 7            // column index for destination
-	bytesSentCol := 11     // column index for bytes_sent
-	bytesReceivedCol := 12 // column index for bytes_received
 
 	for {
 		row, err := reader.Read()
@@ -156,7 +227,7 @@ func main() {
 	scores := make(chan ScoredRecord, len(groupedRecords))
 
 	for _, groupedRecord := range groupedRecords {
-		if len(groupedRecord.Times) <= 36 {
+		if len(groupedRecord.Times) <= opts.MinConnCount {
 			continue
 		}
 
@@ -206,10 +277,10 @@ func main() {
 			}
 
 			// weights for each score can be modified here
-			skewWeight := 1.0
-			madmWeight := 1.0
-			connCountWeight := 1.0
-			sizeWeight := 1.0
+			skewWeight := opts.WeightSkew
+			madmWeight := opts.WeightMadm
+			connCountWeight := opts.WeightConnCount
+			sizeWeight := opts.WeightSize
 
 			scoreVal := (skewWeight*skewScoreVal + madmWeight*madmScoreVal + connCountWeight*connCountScoreVal + sizeWeight*sizeScore) / (skewWeight + madmWeight + connCountWeight + sizeWeight)
 			//scoreVal := (skewScoreVal + madmScoreVal + connCountScoreVal + sizeScore) / 4
@@ -241,8 +312,37 @@ func main() {
 	})
 
 	// Print scored records
+	writeOutput(scoredRecords, opts.OutputFile)
+	// for _, scoredRecord := range scoredRecords {
+	// 	fmt.Printf("%s -> %s | SCORE: %.3f | (skew: %.3f) (madm: %.3f) (connCount: %.3f) (size: %.3f)\n", scoredRecord.Src,
+	//		scoredRecord.Dst, scoredRecord.Score, scoredRecord.SkewScore, scoredRecord.MadmScore, scoredRecord.ConnCountScore,
+	//		scoredRecord.SizeScore)
+	// }
+}
+
+// print scored recordsoutput, and write to file if needed
+func writeOutput(scoredRecords []ScoredRecord, outputFile string) {
+	var file *os.File
+	var err error
+	if outputFile != "" {
+		file, err = os.Create(outputFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer file.Close()
+	}
+
 	for _, scoredRecord := range scoredRecords {
-		fmt.Printf("%s -> %s | SCORE: %.3f | (skew: %.3f) (madm: %.3f) (connCount: %.3f) (size: %.3f)\n", scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.SkewScore, scoredRecord.MadmScore, scoredRecord.ConnCountScore, scoredRecord.SizeScore)
+		output := fmt.Sprintf("%s -> %s | SCORE: %.3f | (skew: %.3f) (madm: %.3f) (connCount: %.3f) (size: %.3f)\n",
+			scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.SkewScore, scoredRecord.MadmScore,
+			scoredRecord.ConnCountScore, scoredRecord.SizeScore)
+		fmt.Print(output)
+		if outputFile != "" {
+			_, err := file.WriteString(output)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
 }
 
