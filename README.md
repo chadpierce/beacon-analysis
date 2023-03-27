@@ -19,14 +19,47 @@ For each version, the input file must include:
 Currently, the Go version is the most interesting to me because the use of goroutines speeds up analysis quite a bit on test data.  
 YMMV on production data that is huge. The lack of Python dependencies and portable binaries is a bonus. 
 
+## Usage
+
+Default values are currently in play, but options can be modified using the arguments listed below:
+
+```
+Usage of bf:
+  -h    Help
+  -B    Don't use bytes sent/received in analysis
+  -D    Use DNS Log CSV Inputs (no size analysis)
+  -P    Use Proxy Log CSV Inputs
+  -cd int
+        csv column for destination (default 7)
+  -cr int
+        csv column for bytes recevied (default 11)
+  -cs int
+        csv column for source (default 2)
+  -ct int
+        csv column for timestamp (default 0)
+  -cx int
+        csv column for bytes sent (default 12)
+  -i string
+        input csv filename
+  -m int
+        minimum number of connections threshold (default 36)
+  -o string
+        write output to given filename
+  -wc float
+        Weight value connection count score (default 1)
+  -wm float
+        Weight value for MADM score (default 1)
+  -ws float
+        Weight value for skew score (default 1)
+  -wz float
+        Weight value for data size score (default 1)
+```
+
+
 ## TODO
 
-- If this is useful, write more documentation (if it wasn't useful it was a fun experiement)
+- Add minimum threshold for scores (only scores over threshold are displayed)
+- Add customizable thresholds for the 4 scoring systems
+- Add input arguments with optional values for thresholds
 - Create a DNS log generator
-- Add input arguments with optional values:
-    - filename
-    - various thresholds
-    - help
-    - toggle data / time analysis
-    - customize input fields
-- combine time and data beacon scores into a single score
+- If this is useful, write more documentation (if it wasn't useful it was a fun experiement)
