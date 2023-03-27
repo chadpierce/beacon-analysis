@@ -132,7 +132,7 @@ func main() {
 	flag.BoolVar(&opts.InputDNS, "X", false, "enable debug mode for extra output (TODO)")
 	flag.Parse()
 	// Check if -h flag is provided
-	if flag.Lookup("h") != nil {
+	if opts.Help {
 		fmt.Println("Usage of program:")
 		flag.PrintDefaults()
 		os.Exit(0)
@@ -291,7 +291,8 @@ func main() {
 			connCountWeight := opts.WeightConnCount
 			sizeWeight := opts.WeightSize
 
-			scoreVal := (skewWeight*skewScoreVal + madmWeight*madmScoreVal + connCountWeight*connCountScoreVal + sizeWeight*sizeScore) / (skewWeight + madmWeight + connCountWeight + sizeWeight)
+			scoreVal := (skewWeight*skewScoreVal + madmWeight*madmScoreVal + connCountWeight*connCountScoreVal +
+				sizeWeight*sizeScore) / (skewWeight + madmWeight + connCountWeight + sizeWeight)
 			//scoreVal := (skewScoreVal + madmScoreVal + connCountScoreVal + sizeScore) / 4
 
 			scoredRecord := ScoredRecord{
