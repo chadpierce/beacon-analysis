@@ -24,11 +24,13 @@ YMMV on production data that is huge. The lack of Python dependencies and portab
 Default values are currently in play, but options can be modified using the arguments listed below:
 
 ```
-Usage of bf:
-  -h    Help
-  -B    Don't use bytes sent/received in analysis
-  -D    Use DNS Log CSV Inputs (no size analysis)
-  -P    Use Proxy Log CSV Inputs
+Usage of program:
+  -B    do not use bytes sent/received in analysis
+  -D    use DNS Log CSV Inputs (no size analysis)
+  -P    use Proxy Log CSV Inputs
+  -S float
+        minimum score threshold (default 0.5)
+  -X    enable debug mode for extra output (TODO)
   -cd int
         csv column for destination (default 7)
   -cr int
@@ -39,26 +41,27 @@ Usage of bf:
         csv column for timestamp (default 0)
   -cx int
         csv column for bytes sent (default 12)
+  -h    display help
   -i string
         input csv filename
   -m int
         minimum number of connections threshold (default 36)
   -o string
         write output to given filename
+  -s int
+        maximum number of sources for destination threshold (default 5)
   -wc float
-        Weight value connection count score (default 1)
+        weight value connection count score (default 1)
   -wm float
-        Weight value for MADM score (default 1)
+        weight value for MADM score (default 1)
   -ws float
-        Weight value for skew score (default 1)
+        weight value for skew score (default 1)
   -wz float
-        Weight value for data size score (default 1)
+        weight value for data size score (default 1)
 ```
-
 
 ## TODO
 
-- Add minimum threshold for scores (only scores over threshold are displayed)
 - Add customizable thresholds for the 4 scoring systems
 - Add input arguments with optional values for thresholds
 - Create a DNS log generator

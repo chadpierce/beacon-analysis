@@ -21,6 +21,7 @@ package main
  *	At the time of this writing, this code is completely written by Bing Chat AI.
  *	Source code from RITA_pcap was fed to the AI, and then it was instructed to re-write
  *	the same logic in go using only native libraries (some tweaking was required).
+ *	Some additional features have been added manually.
  *
  *
  * 	This is documentation also written by Bing Chat:
@@ -57,6 +58,7 @@ import (
 
 // Defining arguments
 type Options struct {
+	Help            bool
 	InputFile       string
 	OutputFile      string
 	ColumnTime      int
@@ -64,6 +66,8 @@ type Options struct {
 	ColumnDest      int
 	ColumnByteRecv  int
 	ColumnByteSent  int
+	MaxSources      int
+	MinScore        float64
 	MinConnCount    int
 	WeightSkew      float64
 	WeightMadm      float64
@@ -107,22 +111,25 @@ type ScoredRecord struct {
 
 func main() {
 	var opts Options
+	flag.BoolVar(&opts.Help, "h", false, "display help")
 	flag.StringVar(&opts.InputFile, "i", "", "input csv filename")
 	flag.StringVar(&opts.OutputFile, "o", "", "write output to given filename ")
 	flag.IntVar(&opts.MinConnCount, "m", 36, "minimum number of connections threshold")
+	flag.IntVar(&opts.MaxSources, "s", 5, "maximum number of sources for destination threshold")
+	flag.Float64Var(&opts.MinScore, "S", .500, "minimum score threshold")
 	flag.IntVar(&opts.ColumnTime, "ct", 0, "csv column for timestamp (default 0)")
 	flag.IntVar(&opts.ColumnSource, "cs", 2, "csv column for source")
 	flag.IntVar(&opts.ColumnDest, "cd", 7, "csv column for destination")
 	flag.IntVar(&opts.ColumnByteRecv, "cr", 11, "csv column for bytes recevied")
 	flag.IntVar(&opts.ColumnByteSent, "cx", 12, "csv column for bytes sent")
-	flag.Float64Var(&opts.WeightSkew, "ws", 1.0, "Weight value for skew score")
-	flag.Float64Var(&opts.WeightMadm, "wm", 1.0, "Weight value for MADM score")
-	flag.Float64Var(&opts.WeightConnCount, "wc", 1.0, "Weight value connection count score")
-	flag.Float64Var(&opts.WeightSize, "wz", 1.0, "Weight value for data size score")
-	flag.BoolVar(&opts.InputProxy, "P", false, "Use Proxy Log CSV Inputs")
-	flag.BoolVar(&opts.InputDNS, "D", false, "Use DNS Log CSV Inputs (no size analysis)")
-	flag.BoolVar(&opts.InputDNS, "B", false, "Don't use bytes sent/received in analysis")
-	flag.BoolVar(&opts.InputDNS, "X", false, "Enable debug mode for extra output (TODO)")
+	flag.Float64Var(&opts.WeightSkew, "ws", 1.0, "weight value for skew score")
+	flag.Float64Var(&opts.WeightMadm, "wm", 1.0, "weight value for MADM score")
+	flag.Float64Var(&opts.WeightConnCount, "wc", 1.0, "weight value connection count score")
+	flag.Float64Var(&opts.WeightSize, "wz", 1.0, "weight value for data size score")
+	flag.BoolVar(&opts.InputProxy, "P", false, "use Proxy Log CSV Inputs")
+	flag.BoolVar(&opts.InputDNS, "D", false, "use DNS Log CSV Inputs (no size analysis)")
+	flag.BoolVar(&opts.InputDNS, "B", false, "do not use bytes sent/received in analysis")
+	flag.BoolVar(&opts.InputDNS, "X", false, "enable debug mode for extra output (TODO)")
 	flag.Parse()
 	// Check if -h flag is provided
 	if flag.Lookup("h") != nil {
@@ -219,6 +226,8 @@ func main() {
 
 	// Group records by source and destination
 	groupedRecords := groupRecords(records)
+	// Remove rows with Popular destinations
+	groupedRecords = removePopularDestinations(groupedRecords, opts.MaxSources)
 
 	var scoredRecords []ScoredRecord
 
@@ -295,7 +304,13 @@ func main() {
 				ConnCountScore: connCountScoreVal,
 			}
 
-			scores <- scoredRecord
+			// only return scored records above threshold
+			if scoreVal > opts.MinScore {
+				scores <- scoredRecord
+			} else {
+				return
+			}
+
 		}(groupedRecord)
 	}
 
@@ -379,6 +394,30 @@ func groupRecords(records []Record) []GroupedRecord {
 	}
 
 	return groupedRecords
+}
+
+func removePopularDestinations(groupedRecords []GroupedRecord, maxDest int) []GroupedRecord {
+	// Create a map to keep track of the number of unique sources for each destination
+	destinationCount := make(map[string]map[string]bool)
+
+	// Iterate over the groupedRecords to count the number of unique sources for each destination
+	for _, record := range groupedRecords {
+		if _, ok := destinationCount[record.Dst]; !ok {
+			destinationCount[record.Dst] = make(map[string]bool)
+		}
+		destinationCount[record.Dst][record.Src] = true
+	}
+
+	// Create a new slice to store the filtered groupedRecords
+	var filteredGroupedRecords []GroupedRecord
+
+	// Iterate over the groupedRecords and only add records where the destination has 5 or fewer unique sources
+	for _, record := range groupedRecords {
+		if len(destinationCount[record.Dst]) <= maxDest {
+			filteredGroupedRecords = append(filteredGroupedRecords, record)
+		}
+	}
+	return filteredGroupedRecords
 }
 
 // percentile calculates the p-th percentile of the given slice of float64 values
