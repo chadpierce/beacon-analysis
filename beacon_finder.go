@@ -1,7 +1,7 @@
 package main
 
 /*	beacon_finder.go
- *  github.com/chadpierce/beacon_analysis
+ *	github.com/chadpierce/beacon_analysis
  *
  *	THIS SCRIPT IS PROVIDED "AS IS" WITH NO WARRANTIES OR GUARANTEES OF ANY
  *	KIND, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY AND/OR FITNESS FOR A
@@ -440,16 +440,20 @@ func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes bool) 
 		}
 		// print to file if output filename exists, or print to console
 		if outputFile != "" {
-			log.Println("INFO: writing to file: ", outputFile)
 			_, err := file.WriteString(output)
 			if err != nil {
 				log.Fatal(err)
 			}
 		} else {
-			log.Println("INFO: finished")
 			fmt.Print(output)
 		}
 	}
+	if outputFile != "" {
+		log.Println("INFO: output to file: ", outputFile)
+	} else {
+		log.Println("INFO: finished")
+	}
+
 }
 
 // groups records by source and destination, removing rows with duplicate timestamps,
