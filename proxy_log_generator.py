@@ -40,14 +40,15 @@ def generate_dummy_log_data(num_sources=200):
         bytes_sent = random.randint(1000, 10000)
 
         if current_time >= beacon_time:
-            jitter = timedelta(seconds=random.randint(-10, 10))
-            #jitter = timedelta(0)  ## uncomment to remove jitter
+            delim = ' '
+            #jitter = timedelta(seconds=random.randint(-10, 10))
+            jitter = timedelta(0)  ## uncomment to remove jitter
             beacon_time += beacon_increment + jitter
-            sent_bytes = 300 # + random.randint(-400, 400)  # uncomment to add randomness
-            rec_bytes = 400 # + random.randint(-400, 400)  # uncomment to add randomness
-            print(f"{current_time.strftime('%Y-%m-%d-%H:%M:%S')},{beacon_source_username_pair[0]},{beacon_source_username_pair[1]},{beacon_dest_ip},{category},{method},{port},itsabeacon.com,{uri},{filetype},{agent},{rec_bytes},{sent_bytes}")
+            sent_bytes = 300 + random.randint(-400, 400)  # uncomment to add randomness
+            rec_bytes = 400 + random.randint(-400, 400)  # uncomment to add randomness
+            print(f"{current_time.strftime('%Y-%m-%d-%H:%M:%S')}{delim}{beacon_source_username_pair[0]}{delim}{beacon_source_username_pair[1]}{delim}{beacon_dest_ip}{delim}{category}{delim}{method}{delim}{port}{delim}itsabeacon.com{delim}{uri}{delim}{filetype}{delim}{agent}{delim}{rec_bytes}{delim}{sent_bytes}")
 
-        print(f"{current_time.strftime('%Y-%m-%d-%H:%M:%S')},{source},{username},{dest_ip},{category},{method},{port},{domain},{uri},{filetype},{agent},{bytes_received},{bytes_sent}")
+        print(f"{current_time.strftime('%Y-%m-%d-%H:%M:%S')}{delim}{source}{delim}{username}{delim}{dest_ip}{delim}{category}{delim}{method}{delim}{port}{delim}{domain}{delim}{uri}{delim}{filetype}{delim}{agent}{delim}{bytes_received}{delim}{bytes_sent}")
         
         current_time += time_increment
 
