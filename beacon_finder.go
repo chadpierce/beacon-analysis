@@ -60,6 +60,7 @@ type Options struct {
 	OutputFile      string
 	OutputDefault   bool
 	Comma           string
+	TimeFormat      string
 	ColumnTime      int
 	ColumnSource    int
 	ColumnDest      int
@@ -149,11 +150,15 @@ func main() {
 		}
 
 		// parse timestamp from first column
-		timestamp, err := time.Parse("2006-01-02-15:04:05", row[timeCol])
+		// timeFmtStr := "2006-01-02-15:04:05"
+		timeFmtStr := opts.TimeFormat
+		timestamp, err := time.Parse(timeFmtStr, row[timeCol])
 		if err != nil {
-			//log.Fatal(err)  // throw warning and skip line - not sure if good idea?
-			log.Println("WARNING: ", err)
-			continue
+			log.Fatal(err) // throw warning and skip line? - not sure if good idea?
+			// INPROG - add prompt to continue after error?
+			// otherwise an error may be thrown for every line
+			//log.Println("WARNING: ", err)
+			//continue
 		}
 
 		// if NoBytes flag was passed, set to 0 - otherwise get values from csv
@@ -320,6 +325,7 @@ func getOptions() Options {
 	flag.StringVar(&opts.OutputFile, "o", "", "write output to given filename")
 	flag.BoolVar(&opts.OutputDefault, "O", false, "write output to inputfilename.out")
 	flag.StringVar(&opts.Comma, "d", ",", "input csv delimiter (put in quotes: ';'")
+	flag.StringVar(&opts.TimeFormat, "t", "2006-01-02-15:04:05", "timestamp format")
 	flag.IntVar(&opts.MinConnCount, "m", 36, "minimum number of connections threshold")
 	flag.IntVar(&opts.MaxSources, "s", 5, "maximum number of sources for destination threshold")
 	flag.Float64Var(&opts.MinScore, "S", .500, "minimum score threshold")
@@ -387,6 +393,9 @@ func getOptions() Options {
 		if !isFlagPassed("d") {
 			opts.Comma = " "
 		}
+		if !isFlagPassed("t") {
+			opts.TimeFormat = "2006-01-02-15:04:05"
+		}
 	} else if !opts.InputProxy && opts.InputDNS {
 		log.Println("INFO: DNS mode selected")
 		if !isFlagPassed("ct") {
@@ -409,6 +418,9 @@ func getOptions() Options {
 		}
 		if !isFlagPassed("B") {
 			opts.NoBytes = true
+		}
+		if !isFlagPassed("t") {
+			opts.TimeFormat = "02-Jan-2006-15:04:05"
 		}
 	}
 
@@ -455,6 +467,20 @@ func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes bool) 
 	}
 
 }
+
+// func () continueOrDont {
+//     reader := bufio.NewReader(os.Stdin)
+//     fmt.Print("Do you want to continue? (Y/N): ")
+//     text, _ := reader.ReadString('\n')
+//     text = strings.TrimSpace(text)
+//     if strings.ToLower(text) == "y" {
+//         fmt.Println("Continuing...")
+//         // continue with the program
+//     } else if strings.ToLower(text) == "n" {
+//         fmt.Println("Exiting...")
+//         os.Exit(0)
+//     }
+// }
 
 // groups records by source and destination, removing rows with duplicate timestamps,
 // keeping the highest byte value.
