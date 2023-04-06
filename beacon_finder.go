@@ -11,40 +11,18 @@ package main
  *	LIABILITY, THEN DO NOT DOWNLOAD OR USE THE SCRIPT. NO TECHNICAL SUPPORT
  *	WILL BE PROVIDED.
  *
- * 	!! TODO update all of this text w/ details on new scoring system
- *
- *	RITA-like beacon detection based on https://github.com/ppopiolek/c2-detection-using-statistical-analysis/blob/main/RITA_pcap.ipynb
- *	and https://github.com/Cyb3r-Monk/RITA-J/blob/main/C2%20Detection%20-%20HTTP.ipynb
+ *	Go based RITA-like beacon detection inspired by RITA itself:
+ *	 - https://github.com/activecm/rita,
+ * 	Along with the following repos:
+ * 	- https://github.com/ppopiolek/c2-detection-using-statistical-analysis/blob/main/RITA_pcap.ipynb
+ *	- https://github.com/Cyb3r-Monk/RITA-J/blob/main/C2%20Detection%20-%20HTTP.ipynb
  *
  *	- If beacon traffic ==> uniform distribution and small Median Absolute Deviation of time deltas
  *	- If user traffic ==> skewed distribution and large Median Absolute Deviation of time deltas
  *
- *	Rudimentary MAD based data size analysis has been added.
- *
- *	Source code from RITA_pcap.ipynb was fed to a chat AI, then the bot was instructed to re-write
- *	the same logic in Go using only native libraries (some tweaking was required to get this working).
- *	Several additional features have been added manually.
- *
- * 	The calculation of each individual score can be tuned to account for variances in real-world traffic by adjusting the
- *		parameters used in their respective calculations.
- *
- * 	For example:
- *
- * 	- The skew score is calculated based on the skewness of the time deltas between consecutive records in a grouped record.
- *		You could adjust the percentiles used to calculate the skewness if desired.
- * 	- The MADM score is calculated based on the median absolute deviation from the median (MADM) of the time deltas between
- * 		consecutive records in a grouped record. You could adjust the scaling factor used to normalize the MADM value if desired.
- * 	- The connection count score is calculated based on the number of records in a grouped record divided by the time duration
- *		between the first and last record. You could adjust the scaling factor used to normalize this value if desired.
- * 	- The size score is calculated based on the median absolute deviation from the median (MADM) of the sent and received
- * 		sizes in a grouped record. You could adjust the scaling factor used to normalize these values if desired.
+ * 	TODO documentation
  *
  */
-
-// back up files
-// clean up code
-// take normal, and beacon, make log file with only that data - run through both scripts
-// compare, tune
 
 import (
 	"encoding/csv"
@@ -56,6 +34,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -73,6 +52,8 @@ type Options struct {
 	ColumnDest     int
 	ColumnByteRecv int
 	ColumnByteSent int
+	ColumnMethod   int
+	ColumnPort     int
 	MaxSources     int
 	MinScore       float64
 	MinConnCount   int
@@ -87,6 +68,7 @@ type Options struct {
 	InputProxy     bool
 	InputDNS       bool
 	NoBytes        bool
+	MinDuration    float64
 	Debug          bool
 }
 
@@ -95,6 +77,8 @@ type Record struct {
 	Timestamp     time.Time
 	Src           string
 	Dst           string
+	Port          int
+	Method        string
 	BytesSent     int
 	BytesReceived int
 }
@@ -103,6 +87,8 @@ type Record struct {
 type GroupedRecord struct {
 	Src           string
 	Dst           string
+	Port          int
+	Method        string
 	Times         []time.Time
 	Deltas        []float64
 	SentSizes     []int
@@ -111,27 +97,27 @@ type GroupedRecord struct {
 
 // represents a grouped record with calculated scores
 type ScoredRecord struct {
-	Src     string
-	Dst     string
-	Score   float64
-	DSScore float64
-	TSScore float64
-	DSSkew  float64
-	DSMadm  float64
-	DSSmall float64
-	TSSkew  float64
-	TSMadm  float64
-	TSConn  float64
-	//SizeScore      float64
-	//SkewScore      float64
-	//MadmScore      float64
-	//ConnCountScore float64
+	Src      string
+	Dst      string
+	Port     int
+	Method   string
+	Duration float64
+	Score    float64
+	DSScore  float64
+	TSScore  float64
+	DSSkew   float64
+	DSMadm   float64
+	DSSmall  float64
+	TSSkew   float64
+	TSMadm   float64
+	TSConn   float64
 }
 
 func main() {
 
 	opts := getOptions()
-
+	isPort := false
+	isMethod := false
 	// TODO check for single char input ...although anything past the first char gets ignored anyway?
 	commaRune := []rune(opts.Comma)[0] // convert string to rune
 	timeCol := opts.ColumnTime
@@ -139,6 +125,14 @@ func main() {
 	dstCol := opts.ColumnDest
 	bytesSentCol := opts.ColumnByteSent
 	bytesReceivedCol := opts.ColumnByteRecv
+	methodCol := opts.ColumnMethod
+	portCol := opts.ColumnPort
+	if methodCol != -1 {
+		isMethod = true
+	}
+	if portCol != -1 {
+		isPort = true
+	}
 
 	file, err := os.Open(opts.InputFile)
 	if err != nil {
@@ -165,33 +159,44 @@ func main() {
 
 		// skip rows where source or destination is "-"  // TODO make this optional?
 		if row[srcCol] == "-" || row[dstCol] == "-" {
-			//fmt.Println("DEBUG dashes")
 			continue
 		}
 
 		// parse timestamp format
-		// timeFmtStr := opts.TimeFormat
-		// timestamp, err := time.Parse(timeFmtStr, row[timeCol])
-		// if err != nil {
-		// 	log.Fatal(err) // throw warning and skip line? - not sure if good idea?
-		// 	// INPROG - add prompt to continue after error?
-		// 	// otherwise an error may be thrown for every line
-		// 	//log.Println("WARNING: ", err)
-		// 	//continue
-		// }
-
-		//for testing, uses epoch time
-		//>go run beacon_finder.go -ct 0 -cs 1 -cd 2 -cx 3 -cr 4 -i http-dataset2.log -d " " -O
-		//timestampStr := "1371601525.249082"
-		timestampStr := row[timeCol]
-		secs, err := strconv.ParseFloat(timestampStr, 64)
+		timeFmtStr := opts.TimeFormat
+		timestamp, err := time.Parse(timeFmtStr, row[timeCol])
 		if err != nil {
-			// handle error
+			log.Fatal(err) // throw warning and skip line? - not sure if good idea?
+			// INPROG - add prompt to continue after error?
+			// otherwise an error may be thrown for every line
+			//log.Println("WARNING: ", err)
+			//continue
 		}
-		timestamp := time.Unix(int64(secs), int64((secs-math.Floor(secs))*1e9))
+
+		// //for testing, uses epoch time
+		// //>go run beacon_finder.go -ct 0 -cs 1 -cd 2 -cx 3 -cr 4 -i http-dataset2.log -d " " -O
+		// //timestampStr := "1371601525.249082"
+		// timestampStr := row[timeCol]
+		// secs, err := strconv.ParseFloat(timestampStr, 64)
+		// if err != nil {
+		// 	// handle error
+		// }
+		// timestamp := time.Unix(int64(secs), int64((secs-math.Floor(secs))*1e9))
+
+		method := ""
+		if isMethod {
+			method = row[methodCol]
+		}
+		port := 0
+		if isPort {
+			port, err = strconv.Atoi(row[portCol])
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 
 		// if NoBytes flag was passed, set to 0 - otherwise get values from csv
-		// TODO only consider bytes SENT!
+		// only bytes sent are considered
 		var bytesSent int
 		var bytesReceived int
 		if opts.NoBytes {
@@ -214,6 +219,8 @@ func main() {
 			Timestamp:     timestamp,
 			Src:           row[srcCol],
 			Dst:           row[dstCol],
+			Port:          port,
+			Method:        method,
 			BytesSent:     bytesSent,
 			BytesReceived: bytesReceived,
 		}
@@ -226,8 +233,13 @@ func main() {
 		return records[i].Timestamp.Before(records[j].Timestamp)
 	})
 
-	// group records by source and destination, ignoring duplicate timestamps
-	groupedRecords := groupRecords(records)
+	// normalize src and dst caseness
+	for i := range records {
+		records[i].NormalizeChars()
+	}
+
+	// group records by source and destination (and port/method if chosen), ignoring duplicate timestamps
+	groupedRecords := groupRecords(records, isPort, isMethod)
 
 	// remove rows with popular destinations
 	groupedRecords = removePopularDestinations(groupedRecords, opts.MaxSources)
@@ -242,13 +254,15 @@ func main() {
 		if len(groupedRecord.Times) <= opts.MinConnCount {
 			continue
 		}
-
+		if (groupedRecord.Times[len(groupedRecord.Times)-1].Sub(groupedRecord.Times[0]).Seconds() / 60 / 60) < opts.MinDuration {
+			continue
+		}
 		wg.Add(1)
 
 		go func(groupedRecord GroupedRecord) {
 			defer wg.Done()
-			// time based scoring
 
+			// time based scoring
 			tsDeltas := make([]float64, len(groupedRecord.Times)-1)
 			for i := 1; i < len(groupedRecord.Times); i++ {
 				tsDeltas[i-1] = groupedRecord.Times[i].Sub(groupedRecord.Times[i-1]).Seconds()
@@ -257,6 +271,8 @@ func main() {
 			tsLowVal := percentile(tsDeltas, 20)
 			tsMidVal := percentile(tsDeltas, 50)
 			tsHighVal := percentile(tsDeltas, 80)
+
+			hoursSesssionDur := groupedRecord.Times[len(groupedRecord.Times)-1].Sub(groupedRecord.Times[0]).Seconds() / 60 / 60
 
 			tsBowleyNumVal := tsLowVal + tsHighVal - 2*tsMidVal
 			tsBowleyDenVal := tsHighVal - tsLowVal
@@ -271,17 +287,14 @@ func main() {
 
 			tsMadmVal := madmFloat(tsDeltas)
 			// If jitter is greater than 30 seconds, set madm score to 0
-			// TODO this may need tuning
+			// TODO TUNING
 			tsMadmScore := 1 - tsMadmVal/30
 			if tsMadmScore < 0 {
 				tsMadmScore = 0
 			}
 
 			// num of connections scoring
-			// TODO 90 value could use tuning?
-
-			fmt.Printf("DEBUG conns %v %v\n", groupedRecord.Src, len(groupedRecord.Times))
-
+			// TODO TUNING 90 value could use tuning?
 			tsConnDivVal := groupedRecord.Times[len(groupedRecord.Times)-1].Sub(groupedRecord.Times[0]).Seconds() / 90
 
 			tsConnCountScore := 10 * float64(len(groupedRecord.Times)) / tsConnDivVal
@@ -290,20 +303,26 @@ func main() {
 			}
 
 			// data based scoring
-			// NOTE TODO only care about data sent - maybe revisit this
+			// only bytes sent are considered
 			dsSentMadm := madmInt(groupedRecord.SentSizes)
 			//receivedMadm := madmInt(groupedRecord.ReceivedSizes)
 
-			//sizeScore := 1 - (sentMadm+receivedMadm)/2/1024
 			dsSizeScore := 1 - dsSentMadm/1024
 
 			if dsSizeScore < 0 {
 				dsSizeScore = 0
 			}
 
-			dsLowVal := percentileInt(groupedRecord.SentSizes, 20.0)
-			dsMidVal := percentileInt(groupedRecord.SentSizes, 50.0)
-			dsHighVal := percentileInt(groupedRecord.SentSizes, 80.0)
+			// convert to floats beforeing passing to percentile()
+			var floatSizes []float64
+			for _, s := range groupedRecord.SentSizes {
+				floatSizes = append(floatSizes, float64(s))
+			}
+			dsLowVal := percentile(floatSizes, 20.0)
+			dsMidVal := percentile(floatSizes, 50.0)
+			dsHighVal := percentile(floatSizes, 80.0)
+
+			//fmt.Printf("DEBUG ds: %v %v %v\n", dsLowVal, dsMidVal, dsHighVal)
 
 			dsBowleyNumVal := dsLowVal + dsHighVal - 2*dsMidVal
 			dsBowleyDenVal := dsHighVal - dsLowVal
@@ -315,14 +334,15 @@ func main() {
 
 			dsSkewScore := 1 - math.Abs(dsSkewVal)
 
-			// if jitter over 128 bytes, score is zero. may need tuning
+			// if jitter over 128 bytes, score is zero
+			// TODO TUNING
 			dsMadmScore := 1.0 - (dsSizeScore / 128.0)
 			if dsMadmScore < 0 {
 				dsMadmScore = 0
 			}
 			// looking for low data sent values
 			// a higher value (default 8192) is less sensitive
-			// TODO tuning
+			// TODO TUNING
 			dsSmallnessScore := 1.0 - (dsMidVal / 4500) //8192.0)
 			if dsSmallnessScore < 0 {
 				dsSmallnessScore = 0
@@ -357,50 +377,42 @@ func main() {
 				dataWeight = 0
 			}
 
-			// Final Scoring, weighted
+			// Final Scoring, weighed
 			tsScore := ((tsSkewWeight*tsSkewScore + tsMadmWeight*tsMadmScore + tsConnWeight*tsConnCountScore) / (tsSkewWeight + tsMadmWeight + tsConnWeight))   // * 1000) / 1000
 			dsScore := ((dsSkewWeight*dsSkewScore + dsMadmWeight*dsMadmScore + dsSmallWeight*dsSmallnessScore) / (dsSkewWeight + dsMadmWeight + dsSmallWeight)) // * 1000) / 1000
 
 			scoreVal := (timeWeight*tsScore + dataWeight*dsScore) / (timeWeight + dataWeight)
 
-			//fmt.Printf("score %v ts %v ds %v \n", scoreVal, tsScore, dsScore)
+			/*
+				// Final Scoring, not weighed
+				dsScore := (((dsSkewScore + dsMadmScore + dsSmallnessScore) / 3.0) * 1000) / 1000
+				tsScore := (((tsSkewScore + tsMadmScore + tsConnCountScore) / 3.0) * 1000) / 1000
+				scoreVal := (dsScore + tsScore) / 2
 
-			// // Final Scoring, not weighted
-			// dsScore := (((dsSkewScore + dsMadmScore + dsSmallnessScore) / 3.0) * 1000) / 1000
-			// tsScore := (((tsSkewScore + tsMadmScore + tsConnCountScore) / 3.0) * 1000) / 1000
-			// scoreVal := (dsScore + tsScore) / 2
-
-			// DEBUG
-			// testdsScore := (dsSkewScore + dsMadmScore + dsSmallnessScore) / 3.0 //) * 1000) / 1000
-			// testtsScore := (tsSkewScore + tsMadmScore + tsConnCountScore) / 3.0 //) * 1000) / 1000
-			// testscoreVal := (testdsScore + testtsScore) / 2
-			// fmt.Printf("TEST score %v ts %v ds %v \n", testscoreVal, testtsScore, testdsScore)
+				// DEBUG
+				testdsScore := (dsSkewScore + dsMadmScore + dsSmallnessScore) / 3.0 //) * 1000) / 1000
+				testtsScore := (tsSkewScore + tsMadmScore + tsConnCountScore) / 3.0 //) * 1000) / 1000
+				testscoreVal := (testdsScore + testtsScore) / 2
+				fmt.Printf("TEST score %v ts %v ds %v \n", testscoreVal, testtsScore, testdsScore)
+			*/
 
 			scoredRecord := ScoredRecord{
-				Src:     groupedRecord.Src,
-				Dst:     groupedRecord.Dst,
-				Score:   scoreVal,
-				DSScore: dsScore,
-				TSScore: tsScore,
-				DSSkew:  dsSkewScore,
-				DSMadm:  dsMadmScore,
-				DSSmall: dsSmallnessScore,
-				TSSkew:  tsSkewScore,
-				TSMadm:  tsMadmScore,
-				TSConn:  tsConnCountScore,
+				Src:      groupedRecord.Src,
+				Dst:      groupedRecord.Dst,
+				Port:     groupedRecord.Port,
+				Method:   groupedRecord.Method,
+				Duration: hoursSesssionDur,
+				Score:    scoreVal,
+				DSScore:  dsScore,
+				TSScore:  tsScore,
+				DSSkew:   dsSkewScore,
+				DSMadm:   dsMadmScore,
+				DSSmall:  dsSmallnessScore,
+				TSSkew:   tsSkewScore,
+				TSMadm:   tsMadmScore,
+				TSConn:   tsConnCountScore,
 			}
 
-			// scoredRecord := ScoredRecord{
-			// 	Src:            groupedRecord.Src,
-			// 	Dst:            groupedRecord.Dst,
-			// 	Score:          scoreVal,
-			// 	SizeScore:      dsSizeScore,
-			// 	SkewScore:      tsSkewScoreVal,
-			// 	MadmScore:      tsMadmScore,
-			// 	ConnCountScore: tsConnCountScore,
-			// }
-
-			//fmt.Printf("## DEBUG: %v \n", scoredRecord)
 			// only return scored records above threshold
 			if scoreVal > opts.MinScore {
 				scores <- scoredRecord
@@ -424,7 +436,14 @@ func main() {
 	})
 
 	// print scored records
-	writeOutput(scoredRecords, opts.OutputFile, opts.NoBytes)
+	writeOutput(scoredRecords, opts.OutputFile, opts.NoBytes, isPort, isMethod)
+}
+
+// normalize character caseness for usernames, domains, etc
+func (r *Record) NormalizeChars() {
+	r.Src = strings.ToLower(r.Src)
+	r.Dst = strings.ToLower(r.Dst)
+	// r.Method = strings.ToUpper(r.Method)  // probably not necessary
 }
 
 func isFlagPassed(name string) bool {
@@ -448,11 +467,14 @@ func getOptions() Options {
 	flag.IntVar(&opts.MinConnCount, "m", 36, "minimum number of connections threshold")
 	flag.IntVar(&opts.MaxSources, "s", 5, "maximum number of sources for destination threshold")
 	flag.Float64Var(&opts.MinScore, "S", .500, "minimum score threshold")
+	flag.Float64Var(&opts.MinDuration, "H", 4, "minimum session duration")
 	flag.IntVar(&opts.ColumnTime, "cT", 0, "csv column for timestamp (default 0)")
 	flag.IntVar(&opts.ColumnSource, "cS", 2, "csv column for source")
 	flag.IntVar(&opts.ColumnDest, "cD", 7, "csv column for destination")
 	flag.IntVar(&opts.ColumnByteRecv, "cR", 11, "csv column for bytes recevied")
 	flag.IntVar(&opts.ColumnByteSent, "cX", 12, "csv column for bytes sent")
+	flag.IntVar(&opts.ColumnMethod, "cM", -1, "csv column for HTTP method")
+	flag.IntVar(&opts.ColumnPort, "cP", -1, "csv column for port")
 	flag.Float64Var(&opts.WeightTime, "wT", 1.0, "weight value for overall time score")
 	flag.Float64Var(&opts.WeightData, "wD", 1.0, "weight value for overall data score")
 	flag.Float64Var(&opts.WeightTSSkew, "wTS", 1.0, "weight value for time skew score")
@@ -516,6 +538,12 @@ func getOptions() Options {
 		if !isFlagPassed("d") {
 			opts.Comma = " "
 		}
+		if !isFlagPassed("cM") {
+			opts.ColumnMethod = 5
+		}
+		if !isFlagPassed("cP") {
+			opts.ColumnPort = 6
+		}
 		if !isFlagPassed("t") {
 			opts.TimeFormat = "2006-01-02-15:04:05"
 		}
@@ -551,7 +579,8 @@ func getOptions() Options {
 }
 
 // print scored records output, and write to file if needed
-func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes bool) {
+// TODO revisit output format
+func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes, isPort, isMethod bool) {
 	var file *os.File
 	var err error
 	if outputFile != "" {
@@ -564,21 +593,24 @@ func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes bool) 
 
 	for _, scoredRecord := range scoredRecords {
 		var output string
+		var strPort string
+		var strMethod string
+		if isPort {
+			strPort = strconv.Itoa(scoredRecord.Port)
+		}
+		if isMethod {
+			strMethod = scoredRecord.Method
+		}
+		strPortMethod := strings.TrimSpace(fmt.Sprintf("%s %s", strPort, strMethod))
 		if noBytes {
-			// output = fmt.Sprintf("%s -> %s | SCORE: %.3f | (skew: %.3f) (madm: %.3f) (connCount: %.3f) (size: -)\n",
-			// 	scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.SkewScore, scoredRecord.MadmScore,
-			// 	scoredRecord.ConnCountScore)
-			output = fmt.Sprintf("%s -> %s | score: %.3f | (ts: %.3f ds: -) | (tsSkew: %.3f tsMadm: %.3f tsConn: %.3f) (dsSkew: - dsMadm: - dsSmallness: -)\n",
-				scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.TSScore, scoredRecord.TSSkew, scoredRecord.TSMadm, scoredRecord.TSConn)
+			output = fmt.Sprintf("%s -> %s %s %.1f | SCORE: %.3f | (ts: %.3f ds: -) | (tsSkew: %.3f tsMadm: %.3f tsConn: %.3f) (dsSkew: - dsMadm: - dsSmallness: -)\n",
+				scoredRecord.Src, scoredRecord.Dst, strPortMethod, scoredRecord.Duration, scoredRecord.Score, scoredRecord.TSScore, scoredRecord.TSSkew, scoredRecord.TSMadm, scoredRecord.TSConn)
 		} else {
-			// output = fmt.Sprintf("%s -> %s | SCORE: %.3f | (skew: %.3f) (madm: %.3f) (connCount: %.3f) (size: %.3f)\n",
-			// 	scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.SkewScore, scoredRecord.MadmScore,
-			// 	scoredRecord.ConnCountScore, scoredRecord.SizeScore)
-			output = fmt.Sprintf("%s -> %s | score: %.3f | (ts: %.3f ds: %.3f) | (tsSkew: %.3f tsMadm: %.3f tsConn: %.3f) (dsSkew: %.3f dsMadm: %.3f dsSmallness: %.3f)\n",
-				scoredRecord.Src, scoredRecord.Dst, scoredRecord.Score, scoredRecord.TSScore, scoredRecord.DSScore, scoredRecord.TSSkew, scoredRecord.TSMadm,
+			output = fmt.Sprintf("%s -> %s %s %.1f | SCORE: %.3f | (ts: %.3f ds: %.3f) | (tsSkew: %.3f tsMadm: %.3f tsConn: %.3f) (dsSkew: %.3f dsMadm: %.3f dsSmallness: %.3f)\n",
+				scoredRecord.Src, scoredRecord.Dst, strPortMethod, scoredRecord.Duration, scoredRecord.Score, scoredRecord.TSScore, scoredRecord.DSScore, scoredRecord.TSSkew, scoredRecord.TSMadm,
 				scoredRecord.TSConn, scoredRecord.DSSkew, scoredRecord.DSMadm, scoredRecord.DSSmall)
 		}
-		// print to file if output filename exists, or print to console
+		// print to file if output filename exists, otherwise print to console
 		if outputFile != "" {
 			_, err := file.WriteString(output)
 			if err != nil {
@@ -613,11 +645,17 @@ func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes bool) 
 // groups records by source and destination, removing rows with duplicate timestamps,
 // keeping the highest byte value.
 // TODO revisit this methodology
-func groupRecords(records []Record) []GroupedRecord {
+func groupRecords(records []Record, groupByPort, groupByMethod bool) []GroupedRecord {
 	groupsMap := make(map[string]GroupedRecord)
 
 	for _, record := range records {
 		key := record.Src + " " + record.Dst
+		if groupByPort {
+			key += " " + strconv.Itoa(record.Port)
+		}
+		if groupByMethod {
+			key += " " + record.Method
+		}
 
 		groupedRecord, ok := groupsMap[key]
 
@@ -625,6 +663,8 @@ func groupRecords(records []Record) []GroupedRecord {
 			groupedRecord = GroupedRecord{
 				Src:           record.Src,
 				Dst:           record.Dst,
+				Port:          record.Port,
+				Method:        record.Method,
 				Times:         []time.Time{},
 				SentSizes:     []int{},
 				ReceivedSizes: []int{},
@@ -695,16 +735,6 @@ func percentile(deltas []float64, p float64) float64 {
 		return (deltas[int(index)-1] + deltas[int(index)]) / 2
 	}
 	return deltas[int(index)]
-}
-
-func percentileInt(sizes []int, p float64) float64 {
-	floatSizes := make([]float64, len(sizes))
-	sort.Float64s(floatSizes)
-	index := p / 100.0 * float64(len(floatSizes))
-	if index == float64(int(index)) {
-		return (floatSizes[int(index)-1] + floatSizes[int(index)]) / 2
-	}
-	return floatSizes[int(index)]
 }
 
 // calculates the median absolute deviation of the given slice of float64 values
