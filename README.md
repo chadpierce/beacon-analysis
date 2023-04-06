@@ -70,10 +70,8 @@ Usage of program:
 
 - Tune default scoring
 - Tune algorithm outputs
-- Add customizable thresholds for the 4 scoring systems
 - Add input arguments with optional values for those thresholds
 - If this is useful, write more documentation (if it wasn't useful it was a fun experiement)
 - ignore input lines that don't start with proper date format? - print warning to screen
-- add start/stop time for session (and duration) to output, potentially use for scoring
 - debug mode that prints all datapoints for each pair
 - Create a DNS log generator
