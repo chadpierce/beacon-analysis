@@ -68,7 +68,9 @@ type Options struct {
 	InputProxy     bool
 	InputDNS       bool
 	NoBytes        bool
+	Caseness       bool
 	MinDuration    float64
+	TuneSmallness  float64
 	Debug          bool
 }
 
@@ -233,9 +235,11 @@ func main() {
 		return records[i].Timestamp.Before(records[j].Timestamp)
 	})
 
-	// normalize src and dst caseness
-	for i := range records {
-		records[i].NormalizeChars()
+	// normalize src and dst caseness, disable with '-nocase' flag
+	if !opts.Caseness {
+		for i := range records {
+			records[i].NormalizeChars()
+		}
 	}
 
 	// group records by source and destination (and port/method if chosen), ignoring duplicate timestamps
@@ -343,7 +347,7 @@ func main() {
 			// looking for low data sent values
 			// a higher value (default 8192) is less sensitive
 			// TODO TUNING
-			dsSmallnessScore := 1.0 - (dsMidVal / 4500) //8192.0)
+			dsSmallnessScore := 1.0 - (dsMidVal / opts.TuneSmallness) //8192.0)
 			if dsSmallnessScore < 0 {
 				dsSmallnessScore = 0
 			}
@@ -414,12 +418,16 @@ func main() {
 			}
 
 			// only return scored records above threshold
-			if scoreVal > opts.MinScore {
+			// unless debug is enabled, then print all
+			if opts.Debug {
 				scores <- scoredRecord
 			} else {
-				return
+				if scoreVal > opts.MinScore {
+					scores <- scoredRecord
+				} else {
+					return
+				}
 			}
-
 		}(groupedRecord)
 	}
 
@@ -463,7 +471,7 @@ func getOptions() Options {
 	flag.StringVar(&opts.OutputFile, "o", "", "write output to given filename")
 	flag.BoolVar(&opts.OutputDefault, "O", false, "write output to inputfilename.out")
 	flag.StringVar(&opts.Comma, "d", ",", "input csv delimiter (put in quotes: ';'")
-	flag.StringVar(&opts.TimeFormat, "t", "2006-01-02-15:04:05", "timestamp format")
+	flag.StringVar(&opts.TimeFormat, "T", "2006-01-02-15:04:05", "timestamp format")
 	flag.IntVar(&opts.MinConnCount, "m", 36, "minimum number of connections threshold")
 	flag.IntVar(&opts.MaxSources, "s", 5, "maximum number of sources for destination threshold")
 	flag.Float64Var(&opts.MinScore, "S", .500, "minimum score threshold")
@@ -486,6 +494,8 @@ func getOptions() Options {
 	flag.BoolVar(&opts.InputProxy, "P", false, "use Proxy Log CSV Inputs")
 	flag.BoolVar(&opts.InputDNS, "D", false, "use DNS Log CSV Inputs (no size analysis)")
 	flag.BoolVar(&opts.NoBytes, "B", false, "do not use bytes sent/received in analysis")
+	flag.BoolVar(&opts.Caseness, "nocase", false, "disable conversion to lowercase for src and dst")
+	flag.Float64Var(&opts.TuneSmallness, "tS", 8192, "tuning value for data smallness score")
 	flag.BoolVar(&opts.Debug, "X", false, "[TODO] enable debug mode for extra output") // TODO
 	flag.Parse()
 	// check if -h flag is passed
