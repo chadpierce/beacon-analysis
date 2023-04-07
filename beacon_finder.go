@@ -245,8 +245,12 @@ func main() {
 	// group records by source and destination (and port/method if chosen), ignoring duplicate timestamps
 	groupedRecords := groupRecords(records, isPort, isMethod)
 
+	log.Println("cleaned records: ", len(groupedRecords))
+
 	// remove rows with popular destinations
 	groupedRecords = removePopularDestinations(groupedRecords, opts.MaxSources)
+
+	//log.Println("cleaned records: ", len(groupedRecords))
 
 	var scoredRecords []ScoredRecord
 
@@ -434,6 +438,8 @@ func main() {
 	wg.Wait()
 	close(scores)
 
+	log.Println("scored records: ", len(scoredRecords))
+
 	for scoredRecord := range scores {
 		scoredRecords = append(scoredRecords, scoredRecord)
 	}
@@ -539,11 +545,11 @@ func getOptions() Options {
 		if !isFlagPassed("cD") {
 			opts.ColumnDest = 7
 		}
-		if !isFlagPassed("cX") {
-			opts.ColumnByteSent = 11
-		}
 		if !isFlagPassed("cR") {
-			opts.ColumnByteRecv = 12
+			opts.ColumnByteRecv = 11
+		}
+		if !isFlagPassed("cX") {
+			opts.ColumnByteSent = 12
 		}
 		if !isFlagPassed("d") {
 			opts.Comma = " "
