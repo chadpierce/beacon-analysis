@@ -69,6 +69,7 @@ type Options struct {
 	InputDNS       bool
 	NoBytes        bool
 	Caseness       bool
+	SubUser        bool
 	MinDuration    float64
 	TuneSmallness  float64
 	Debug          bool
@@ -159,9 +160,18 @@ func main() {
 			//continue
 		}
 
-		// skip rows where source or destination is "-"  // TODO make this optional?
-		if row[srcCol] == "-" || row[dstCol] == "-" {
-			continue
+		// skip rows where source or destination is "-"
+		// if proxy mode, and -subsource passed, sub missing username with IP
+		if isFlagPassed("P") && opts.SubUser {
+			if row[dstCol] == "-" {
+				continue
+			} else if row[srcCol] == "-" && srcCol == 2 {
+				row[srcCol] = row[1] // this is kind of a hack
+			}
+		} else {
+			if row[srcCol] == "-" || row[dstCol] == "-" {
+				continue
+			}
 		}
 
 		// parse timestamp format
@@ -245,7 +255,7 @@ func main() {
 	// group records by source and destination (and port/method if chosen), ignoring duplicate timestamps
 	groupedRecords := groupRecords(records, isPort, isMethod)
 
-	log.Println("cleaned records: ", len(groupedRecords))
+	//log.Println("cleaned records: ", len(groupedRecords))
 
 	// remove rows with popular destinations
 	groupedRecords = removePopularDestinations(groupedRecords, opts.MaxSources)
@@ -438,7 +448,7 @@ func main() {
 	wg.Wait()
 	close(scores)
 
-	log.Println("scored records: ", len(scoredRecords))
+	//log.Println("scored records: ", len(scoredRecords))
 
 	for scoredRecord := range scores {
 		scoredRecords = append(scoredRecords, scoredRecord)
@@ -501,6 +511,7 @@ func getOptions() Options {
 	flag.BoolVar(&opts.InputDNS, "D", false, "use DNS Log CSV Inputs (no size analysis)")
 	flag.BoolVar(&opts.NoBytes, "B", false, "do not use bytes sent/received in analysis")
 	flag.BoolVar(&opts.Caseness, "nocase", false, "disable conversion to lowercase for src and dst")
+	flag.BoolVar(&opts.SubUser, "subuser", false, "if proxy mode, username is source, sub - with IP")
 	flag.Float64Var(&opts.TuneSmallness, "tS", 8192, "tuning value for data smallness score")
 	flag.BoolVar(&opts.Debug, "X", false, "[TODO] enable debug mode for extra output") // TODO
 	flag.Parse()
@@ -618,6 +629,13 @@ func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes, isPor
 			strMethod = scoredRecord.Method
 		}
 		strPortMethod := strings.TrimSpace(fmt.Sprintf("%s %s", strPort, strMethod))
+
+		//safify dest strings for output
+		lastIndex := strings.LastIndex(scoredRecord.Dst, ".")
+		if lastIndex != -1 {
+			scoredRecord.Dst = scoredRecord.Dst[:lastIndex] + "[.]" + scoredRecord.Dst[lastIndex+1:]
+		}
+
 		if noBytes {
 			output = fmt.Sprintf("%s -> %s %s %.1f | SCORE: %.3f | (ts: %.3f ds: -) | (tsSkew: %.3f tsMadm: %.3f tsConn: %.3f) (dsSkew: - dsMadm: - dsSmallness: -)\n",
 				scoredRecord.Src, scoredRecord.Dst, strPortMethod, scoredRecord.Duration, scoredRecord.Score, scoredRecord.TSScore, scoredRecord.TSSkew, scoredRecord.TSMadm, scoredRecord.TSConn)
