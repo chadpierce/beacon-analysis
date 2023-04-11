@@ -174,6 +174,15 @@ func main() {
 			}
 		}
 
+		// if DNS mode, remove subdomains and skip destintations with no dot (this is generally local hostname lookups)
+		// or backslash (this appears in logs frequently)
+		if isFlagPassed("D") {
+			row[dstCol] = dnsParseDest(row[dstCol])
+			if !strings.Contains(row[dstCol], ".") || strings.Contains(row[dstCol], `\`) {
+				continue
+			}
+		}
+
 		// parse timestamp format
 		timeFmtStr := opts.TimeFormat
 		timestamp, err := time.Parse(timeFmtStr, row[timeCol])
@@ -675,6 +684,20 @@ func writeOutput(scoredRecords []ScoredRecord, outputFile string, noBytes, isPor
 //         os.Exit(0)
 //     }
 // }
+
+func dnsParseDest(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) < 3 {
+		return host
+	}
+	for _, part := range parts {
+		if _, err := strconv.Atoi(part); err == nil {
+			return host
+		}
+	}
+	domain := strings.Join(parts[len(parts)-2:], ".")
+	return domain
+}
 
 // groups records by source and destination, removing rows with duplicate timestamps,
 // keeping the highest byte value.
